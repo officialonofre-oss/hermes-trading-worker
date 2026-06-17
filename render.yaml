@@ -1,0 +1,15 @@
+services:
+  - type: worker
+    name: hermes-trading-worker
+    env: docker
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    disk:
+      name: hermes-state
+      mountPath: /app/state
+      sizeGB: 1
+    envVars:
+      - key: HERMES_TRADING_MODE
+        value: paper
+      - key: HERMES_TRADING_I_ACCEPT_RISK
+        value: false
