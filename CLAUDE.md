@@ -73,9 +73,11 @@ outage:
 - `price.py` — real data via `yfinance` (`_to_yfinance_ticker` maps `"ETH/USDT"` →
   `"ETH-USD"`), RSI computed by the shared `compute_rsi()` over the fetched window; falls
   back to randomized data on any failure.
-- `onchain.py` — real data via Glassnode's active-addresses endpoint if `GLASSNODE_API_KEY`
-  is set; falls back to a static `active_addresses: 0` stub if the key is absent or the call
-  fails.
+- `onchain.py` — real data via Coin Metrics' free Community API (active-addresses metric,
+  `AdrActCnt`), no key required; falls back to a static `active_addresses: 0` stub if the
+  call fails or returns no usable data. (Glassnode was evaluated first but its free/low
+  tier only exposes a 50-calls/day "Light API" — too limited for a 60s polling loop — so
+  Coin Metrics' free tier was used instead.)
 - `news.py` — real data via CryptoPanic if `CRYPTOPANIC_API_KEY` is set (sentiment derived
   from aggregate post upvotes/downvotes in `_derive_sentiment`); falls back to a static
   `"neutral"` stub if the key is absent or the call fails.
