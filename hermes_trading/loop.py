@@ -24,6 +24,7 @@ async def load_strategy():
         "version": "01",
         "entry": {"indicator": "rsi", "threshold": 30, "direction": "long"},
         "stop_loss_pct": 2.0,
+        "take_profit_pct": 4.0,
         "position_size_r": 0.5
     }
 
@@ -35,12 +36,55 @@ async def paper_trade(decision, price_data, strategy):
         "decision": decision,
         "entry_price": price_data.get("price"),
         "strategy_version": strategy["version"],
-        "pnl": 0.0,  # will be updated on close in real impl
+        "pnl": 0.0,
         "closed": False
     }
     with open(TRADES_FILE, "a") as f:
         f.write(json.dumps(trade) + "\n")
     return trade
+
+async def close_open_trades(price_data, strategy):
+    """Check open trades for this asset against the current price and close
+    any that have hit their stop-loss or take-profit level."""
+    if not TRADES_FILE.exists():
+        return
+
+    with open(TRADES_FILE) as f:
+        trades = [json.loads(line) for line in f if line.strip()]
+
+    current_price = price_data.get("price")
+    symbol = price_data.get("symbol")
+    stop_loss_pct = strategy.get("stop_loss_pct", 2.0)
+    take_profit_pct = strategy.get("take_profit_pct", stop_loss_pct * 2)
+    changed = False
+
+    for trade in trades:
+        if trade.get("closed") or trade.get("asset") != symbol:
+            continue
+        if trade.get("decision") != "enter_long":
+            continue
+
+        entry_price = trade["entry_price"]
+        change_pct = (current_price - entry_price) / entry_price * 100
+
+        if change_pct <= -stop_loss_pct:
+            exit_reason = "stop_loss"
+        elif change_pct >= take_profit_pct:
+            exit_reason = "take_profit"
+        else:
+            continue
+
+        trade["closed"] = True
+        trade["exit_price"] = current_price
+        trade["exit_reason"] = exit_reason
+        trade["pnl"] = change_pct / 100
+        trade["closed_at"] = datetime.now(timezone.utc).isoformat()
+        changed = True
+
+    if changed:
+        with open(TRADES_FILE, "w") as f:
+            for trade in trades:
+                f.write(json.dumps(trade) + "\n")
 
 async def trading_loop(asset, goal):
     consecutive_failures = 0
@@ -54,6 +98,8 @@ async def trading_loop(asset, goal):
             macro = await fetch_macro()
 
             strategy = await load_strategy()
+
+            await close_open_trades(price, strategy)
 
             # Extremely simple RSI-like decision for starter
             rsi = price.get("rsi", 50)
