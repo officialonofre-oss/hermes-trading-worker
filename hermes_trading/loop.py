@@ -44,6 +44,18 @@ async def paper_trade(decision, price_data, strategy):
         f.write(json.dumps(trade) + "\n")
     return trade
 
+async def has_open_position(symbol):
+    if not TRADES_FILE.exists():
+        return False
+    with open(TRADES_FILE) as f:
+        for line in f:
+            if not line.strip():
+                continue
+            trade = json.loads(line)
+            if trade.get("asset") == symbol and not trade.get("closed"):
+                return True
+    return False
+
 async def close_open_trades(price_data, strategy):
     """Check open trades for this asset against the current price and close
     any that have hit their stop-loss or take-profit level."""
@@ -98,7 +110,7 @@ async def trading_loop(asset, goal):
             rsi = price.get("rsi", 50)
             decision = evaluate_entry(rsi, strategy)
 
-            if decision:
+            if decision and not await has_open_position(price.get("symbol")):
                 await paper_trade(decision, price, strategy)
 
             # heartbeat
