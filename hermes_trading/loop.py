@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import yaml
 from hermes_trading.score import score_trades
+from hermes_trading.strategy_rules import evaluate_entry, evaluate_exit
 from hermes_trading.adapters.price import fetch_price
 from hermes_trading.adapters.onchain import fetch_onchain
 from hermes_trading.adapters.news import fetch_news
@@ -54,8 +55,6 @@ async def close_open_trades(price_data, strategy):
 
     current_price = price_data.get("price")
     symbol = price_data.get("symbol")
-    stop_loss_pct = strategy.get("stop_loss_pct", 2.0)
-    take_profit_pct = strategy.get("take_profit_pct", stop_loss_pct * 2)
     changed = False
 
     for trade in trades:
@@ -64,20 +63,14 @@ async def close_open_trades(price_data, strategy):
         if trade.get("decision") != "enter_long":
             continue
 
-        entry_price = trade["entry_price"]
-        change_pct = (current_price - entry_price) / entry_price * 100
-
-        if change_pct <= -stop_loss_pct:
-            exit_reason = "stop_loss"
-        elif change_pct >= take_profit_pct:
-            exit_reason = "take_profit"
-        else:
+        exit_info = evaluate_exit(trade["entry_price"], current_price, strategy)
+        if not exit_info:
             continue
 
         trade["closed"] = True
         trade["exit_price"] = current_price
-        trade["exit_reason"] = exit_reason
-        trade["pnl"] = change_pct / 100
+        trade["exit_reason"] = exit_info["exit_reason"]
+        trade["pnl"] = exit_info["pnl"]
         trade["closed_at"] = datetime.now(timezone.utc).isoformat()
         changed = True
 
@@ -103,9 +96,7 @@ async def trading_loop(asset, goal):
 
             # Extremely simple RSI-like decision for starter
             rsi = price.get("rsi", 50)
-            decision = None
-            if strategy["entry"]["direction"] == "long" and rsi < strategy["entry"]["threshold"]:
-                decision = "enter_long"
+            decision = evaluate_entry(rsi, strategy)
 
             if decision:
                 await paper_trade(decision, price, strategy)
