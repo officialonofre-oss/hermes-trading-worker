@@ -11,3 +11,6 @@ wheels/
 
 # Local secrets
 .env
+
+# Generated at runtime, not checked in
+state/dashboard.html
