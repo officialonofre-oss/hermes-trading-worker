@@ -5,7 +5,10 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:${PATH}"
 COPY pyproject.toml ./
 COPY hermes_trading ./hermes_trading
-COPY state ./state
+COPY state ./state_defaults
 RUN uv sync
 ENV HERMES_TRADING_MODE=paper
+COPY docker-entrypoint.sh ./
+RUN chmod +x docker-entrypoint.sh
+ENTRYPOINT ["./docker-entrypoint.sh"]
 CMD ["uv", "run", "python", "-m", "hermes_trading.run"]

@@ -1,0 +1,11 @@
+.venv
+__pycache__
+*.py[oc]
+.env
+.git
+
+# Runtime-generated state -- must not get baked into state_defaults
+state/trades.jsonl
+state/heartbeat.json
+state/backtests.jsonl
+state/dashboard.html

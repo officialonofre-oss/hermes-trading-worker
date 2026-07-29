@@ -183,3 +183,15 @@ Runs as a Render.com background worker (`render.yaml`): built from the `Dockerfi
 versioning and trade history survive restarts/deploys. `HERMES_TRADING_MODE` defaults to
 `paper`; `HERMES_TRADING_I_ACCEPT_RISK` defaults to `false` — there is no live-trading code
 path currently, so these are forward-looking safety flags rather than active switches.
+
+**Persistent-disk seeding gotcha:** Render's disk mounts at `/app/state` — the same path
+the Dockerfile would otherwise bake default state files into. On first boot the disk is
+empty and *shadows* whatever the image put there, so a plain `COPY state ./state` means
+`goal.yaml` etc. are invisible at runtime even though they're clearly present in the image
+(this crashed the very first real deploy with `FileNotFoundError: state/goal.yaml`, from
+`run.py`'s `load_goal()`, which had no fallback). The fix: the Dockerfile copies defaults to
+`./state_defaults` instead, and `docker-entrypoint.sh` seeds `/app/state` from there only
+when `goal.yaml` is missing — so first boot gets seeded, but a disk that already has real
+(possibly reflection-evolved) state is never overwritten. Keep this seed-if-missing logic
+if `state_defaults`/the entrypoint ever change; don't revert to copying straight into
+`./state` in the Dockerfile.
