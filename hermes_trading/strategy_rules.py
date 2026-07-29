@@ -3,11 +3,21 @@ so a strategy is always evaluated identically in both places."""
 from typing import Dict, Optional
 
 
-def evaluate_entry(rsi: float, strategy: Dict) -> Optional[str]:
+def evaluate_entry(rsi: float, strategy: Dict, sentiment: str = "neutral",
+                    onchain_trend: str = "unknown") -> Optional[str]:
+    """RSI is the primary signal; sentiment/onchain act as a veto, not a
+    confirmation requirement -- a bearish sentiment or declining onchain
+    trend blocks entry, but "neutral"/"unknown" (including missing or
+    unavailable data) never does. That keeps a brief secondary data-source
+    outage from silently halting trading altogether."""
     entry = strategy["entry"]
-    if entry["direction"] == "long" and rsi < entry["threshold"]:
-        return "enter_long"
-    return None
+    if entry["direction"] != "long" or rsi >= entry["threshold"]:
+        return None
+    if sentiment == "bearish":
+        return None
+    if onchain_trend == "declining":
+        return None
+    return "enter_long"
 
 
 def evaluate_exit(entry_price: float, current_price: float, strategy: Dict) -> Optional[Dict]:

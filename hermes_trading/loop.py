@@ -29,7 +29,7 @@ async def load_strategy():
         "position_size_r": 0.5
     }
 
-async def paper_trade(decision, price_data, strategy):
+async def paper_trade(decision, price_data, strategy, signals=None):
     # Very simple paper trade simulator
     trade = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -37,6 +37,7 @@ async def paper_trade(decision, price_data, strategy):
         "decision": decision,
         "entry_price": price_data.get("price"),
         "strategy_version": strategy["version"],
+        "signals": signals or {},
         "pnl": 0.0,
         "closed": False
     }
@@ -106,12 +107,15 @@ async def trading_loop(asset, goal):
 
             await close_open_trades(price, strategy)
 
-            # Extremely simple RSI-like decision for starter
+            # RSI is the primary signal; sentiment/onchain trend veto it (see strategy_rules.evaluate_entry)
             rsi = price.get("rsi", 50)
-            decision = evaluate_entry(rsi, strategy)
+            sentiment = news.get("sentiment", "neutral")
+            onchain_trend = onchain.get("trend", "unknown")
+            decision = evaluate_entry(rsi, strategy, sentiment=sentiment, onchain_trend=onchain_trend)
 
             if decision and not await has_open_position(price.get("symbol")):
-                await paper_trade(decision, price, strategy)
+                signals = {"rsi": rsi, "sentiment": sentiment, "onchain_trend": onchain_trend}
+                await paper_trade(decision, price, strategy, signals=signals)
 
             # heartbeat
             heartbeat = {

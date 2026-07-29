@@ -11,7 +11,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 import yaml
 
-from hermes_trading.backtest import fetch_history, simulate, summarize, RSI_WINDOW
+from hermes_trading.backtest import (
+    fetch_history, fetch_sentiment_history, fetch_onchain_trend_history,
+    simulate, summarize, RSI_WINDOW,
+)
 
 STATE_DIR = Path(__file__).parent.parent / "state"
 STRATEGY_FILE = STATE_DIR / "strategy.yaml"
@@ -85,11 +88,14 @@ def fallback_reflect(goal, days=30):
         })
         return
 
-    baseline = summarize(simulate(closes, timestamps, strategy), goal)
+    sentiment_by_date = fetch_sentiment_history(days)
+    onchain_trend_by_date = fetch_onchain_trend_history(asset, days)
+
+    baseline = summarize(simulate(closes, timestamps, strategy, sentiment_by_date, onchain_trend_by_date), goal)
 
     new_version = str(int(old_version) + 1).zfill(2)
     candidate["version"] = new_version
-    candidate_result = summarize(simulate(closes, timestamps, candidate), goal)
+    candidate_result = summarize(simulate(closes, timestamps, candidate, sentiment_by_date, onchain_trend_by_date), goal)
 
     accepted = candidate_result["score"] >= baseline["score"]
 

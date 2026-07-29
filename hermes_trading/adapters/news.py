@@ -4,7 +4,7 @@ import httpx
 FEAR_GREED_URL = "https://api.alternative.me/fng/"
 
 
-def _classify(value: int) -> str:
+def classify_sentiment(value: int) -> str:
     if value <= 40:
         return "bearish"
     if value >= 60:
@@ -34,7 +34,7 @@ async def fetch_news(symbol: str) -> Dict:
                 return {
                     "schema_version": "1.0",
                     "symbol": symbol,
-                    "sentiment": _classify(value),
+                    "sentiment": classify_sentiment(value),
                     "fear_greed_value": value,
                     "fear_greed_label": label,
                     "as_of": as_of,

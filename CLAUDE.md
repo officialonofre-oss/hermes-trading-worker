@@ -44,26 +44,36 @@ instead, and `.env` doesn't exist there.
 **Entry & loop** (`hermes_trading/run.py` → `hermes_trading/loop.py`)
 `run.py` loads `state/goal.yaml` for the target asset/objectives, then hands off to
 `trading_loop()` in `loop.py`, which runs forever on a 60s cycle:
-1. Fetch data from the four adapters (price, onchain, news, macro) — all called every cycle,
-   but only price's RSI actually drives the entry decision today; onchain/news/macro are
-   fetched and discarded, not yet part of the decision logic (see Adapters below).
+1. Fetch data from the four adapters (price, onchain, news, macro) every cycle. Macro is
+   still fetched and discarded (see Adapters below); price/onchain/news all feed the entry
+   decision now (see Strategy rules).
 2. Reload `state/strategy.yaml` fresh each cycle (so a reflection run picked up between
    cycles takes effect immediately, no restart needed).
 3. Close any open position first (`close_open_trades`): checks the current price against
    that trade's stop-loss/take-profit levels and closes it with a real `pnl` if hit.
-4. Apply the entry rule (RSI threshold via `evaluate_entry`) and, if triggered **and** there
-   is no open position for this asset already (`has_open_position`), record a paper trade.
-   The one-position-at-a-time guard exists because nothing else prevents the loop from
-   opening a new near-duplicate trade every single cycle while RSI stays under threshold.
+4. Apply the entry rule (`evaluate_entry`, RSI + sentiment + onchain trend) and, if triggered
+   **and** there is no open position for this asset already (`has_open_position`), record a
+   paper trade with the signals that led to it (`paper_trade(..., signals={...})`). The
+   one-position-at-a-time guard exists because nothing else prevents the loop from opening a
+   new near-duplicate trade every single cycle while RSI stays under threshold.
 5. Write a heartbeat to `state/heartbeat.json`.
 6. On exceptions: increment a failure counter, sleep 30s, and retry; after 5 consecutive
    failures the loop breaks (circuit breaker) rather than spinning forever.
 
 **Strategy rules** (`hermes_trading/strategy_rules.py`)
-`evaluate_entry(rsi, strategy)` and `evaluate_exit(entry_price, current_price, strategy)` are
-pure functions with no I/O. They exist specifically so `loop.py` (live) and `backtest.py`
-(historical replay) evaluate a strategy identically — do not reimplement entry/exit logic
-inline in either place; import from here instead.
+`evaluate_entry(rsi, strategy, sentiment="neutral", onchain_trend="unknown")` and
+`evaluate_exit(entry_price, current_price, strategy)` are pure functions with no I/O. They
+exist specifically so `loop.py` (live) and `backtest.py` (historical replay) evaluate a
+strategy identically — do not reimplement entry/exit logic inline in either place; import
+from here instead.
+
+RSI is the primary signal (`entry.threshold` in `strategy.yaml`); sentiment and onchain
+trend are a **veto, not a confirmation requirement** — `sentiment == "bearish"` or
+`onchain_trend == "declining"` blocks an otherwise-valid entry, but the default/missing
+values (`"neutral"`/`"unknown"`) never do. This is deliberate: a brief outage on either free
+data source shouldn't silently stop the strategy from trading at all. Both signals are
+computed by pure, shared classifier functions (`news.classify_sentiment`,
+`onchain.classify_trend`) so live and backtest always agree — see Adapters and Backtesting.
 
 **Adapters** (`hermes_trading/adapters/`)
 Each adapter (`price.py`, `onchain.py`, `news.py`, `macro.py`) is an independent async
@@ -77,26 +87,33 @@ outage:
   `AdrActCnt`), no key required; falls back to a static `active_addresses: 0` stub if the
   call fails or returns no usable data. (Glassnode was evaluated first but its free/low
   tier only exposes a 50-calls/day "Light API" — too limited for a 60s polling loop — so
-  Coin Metrics' free tier was used instead.)
+  Coin Metrics' free tier was used instead.) `fetch_onchain` also fetches a
+  `TREND_LOOKBACK_DAYS` (12-day) window of daily values and classifies a `trend`
+  (`declining`/`stable`/`growing`/`unknown`) via `classify_trend()`, comparing the latest
+  value to the one 7 entries back — a positional-window comparison, same style as
+  `price.py`'s RSI, not a date-matching lookup.
 - `news.py` — real data via the Alternative.me Crypto Fear & Greed Index, no key required;
-  maps the 0-100 index into `bearish`/`neutral`/`bullish` via `_classify()`. This is a
-  market-wide index, not per-asset, so every symbol gets the same value. (CryptoPanic was
+  maps the 0-100 index into `bearish`/`neutral`/`bullish` via `classify_sentiment()`. This is
+  a market-wide index, not per-asset, so every symbol gets the same value. (CryptoPanic was
   evaluated first but its usable API tier is $50/week — too expensive for what this needs
   — so the free Fear & Greed Index was used instead.) Falls back to a static `"neutral"`
   stub if the call fails or returns no usable data.
 - `macro.py` — still a hardcoded stub (DXY/fed funds); no provider wired up yet.
 
-Onchain/news being wired up is necessary but not sufficient for them to affect trading:
-`loop.py` and `strategy_rules.py` still only look at price/RSI. Feeding these signals into
-the actual entry/exit decision is future work, not something to assume is already wired.
-
 **Backtesting** (`hermes_trading/backtest.py`)
 Replays historical hourly closes (via `yfinance`) through the exact same `strategy_rules`
 functions the live loop uses, enforcing one open position at a time (a backtest-only
 simplifying assumption — see the guard note above; live now matches this too).
-`RSI_WINDOW = 72` mirrors `price.py`'s `period="3d", interval="1h"` live window. Each run
-prints a summary (trade count, win rate, return, score) and appends a record to
-`state/backtests.jsonl`.
+`RSI_WINDOW = 72` mirrors `price.py`'s `period="3d", interval="1h"` live window. To keep the
+sentiment/onchain veto backtest-faithful, `fetch_sentiment_history()` and
+`fetch_onchain_trend_history()` pull the same free APIs' historical series (daily
+resolution) and build `{date: classification}` lookups that `simulate()` joins to each
+hourly bar by date; both return `{}` on failure so a data-source outage degrades the same
+way live does (veto simply never fires) rather than crashing the backtest. These functions
+do their own synchronous `httpx` calls rather than reusing the async `fetch_onchain`/
+`fetch_news` — same pattern price history fetching already uses (own fetch, shared pure
+classifier). Each run prints a summary (trade count, win rate, return, score) and appends a
+record to `state/backtests.jsonl`.
 
 **Scoring** (`hermes_trading/score.py`)
 `score_trades()` turns closed trades + `state/goal.yaml` targets (target return, max
@@ -112,9 +129,11 @@ reading it:
 - `propose_change()` proposes one deterministic rule change per run (loosen RSI entry
   threshold, else tighten stop loss, else no change) without touching the live file.
 - The candidate is **backtested against the same historical window as the current strategy**
-  (via `backtest.fetch_history`/`simulate`/`summarize`) before being committed — it's only
-  applied if its score is `>=` the baseline's. If historical data can't be fetched, or
-  there's too little of it, the change is skipped rather than applied blind.
+  (via `backtest.fetch_history`/`fetch_sentiment_history`/`fetch_onchain_trend_history`/
+  `simulate`/`summarize`, fetched once and reused for both the baseline and candidate runs)
+  before being committed — it's only applied if its score is `>=` the baseline's. If
+  historical price data can't be fetched, or there's too little of it, the change is skipped
+  rather than applied blind.
 - Only on acceptance: archives the current `state/strategy.yaml` to
   `state/history/v{old}.yaml`, then writes the candidate with a bumped `version` (zero-padded,
   e.g. `"01"` → `"02"`).
