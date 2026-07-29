@@ -78,9 +78,12 @@ outage:
   call fails or returns no usable data. (Glassnode was evaluated first but its free/low
   tier only exposes a 50-calls/day "Light API" — too limited for a 60s polling loop — so
   Coin Metrics' free tier was used instead.)
-- `news.py` — real data via CryptoPanic if `CRYPTOPANIC_API_KEY` is set (sentiment derived
-  from aggregate post upvotes/downvotes in `_derive_sentiment`); falls back to a static
-  `"neutral"` stub if the key is absent or the call fails.
+- `news.py` — real data via the Alternative.me Crypto Fear & Greed Index, no key required;
+  maps the 0-100 index into `bearish`/`neutral`/`bullish` via `_classify()`. This is a
+  market-wide index, not per-asset, so every symbol gets the same value. (CryptoPanic was
+  evaluated first but its usable API tier is $50/week — too expensive for what this needs
+  — so the free Fear & Greed Index was used instead.) Falls back to a static `"neutral"`
+  stub if the call fails or returns no usable data.
 - `macro.py` — still a hardcoded stub (DXY/fed funds); no provider wired up yet.
 
 Onchain/news being wired up is necessary but not sufficient for them to affect trading:
