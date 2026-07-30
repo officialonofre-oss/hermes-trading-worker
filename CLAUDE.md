@@ -160,6 +160,20 @@ given `state/*.jsonl` is still empty, so early-history real data (e.g. an existi
 Regenerate after state changes; it does not auto-refresh itself, and `state/dashboard.html`
 is gitignored (generated, like `trades.jsonl`).
 
+**Debug server** (`hermes_trading/debug_server.py`)
+A small stdlib-only (no new dependency) read-only HTTP server, started by `run.py` in a
+background thread alongside `trading_loop()` so the live worker is inspectable without
+shelling in. Routes: `/health` (always open), `/dashboard` (same `dashboard.build_data()`/
+`render()` as the CLI tool, live), `/state/{trades,hypotheses,backtests}` (JSON arrays from
+the matching `.jsonl`), `/state/heartbeat` (JSON). Deliberately whitelists exact file keys
+rather than accepting a path from the request — no path-traversal surface. All routes except
+`/health` are gated by `DEBUG_TOKEN` if that env var is set (checked via `Authorization:
+Bearer <token>` or a `?token=` query param); unset, they're open. **Important:** this only
+becomes internet-reachable if the Render service is a Web Service — Render does not route
+public traffic to Background Workers, and it currently deploys as `type: worker` (see
+Deployment below). The server binds `$PORT` (falling back to 8080) either way, so it also
+works for local testing regardless of Render service type.
+
 **State directory** (`state/`) is the persistent, mutable heart of the system, separate from
 code:
 - `goal.yaml` — static objectives (target return, max drawdown, min Sharpe, reflection cadence).
@@ -195,3 +209,10 @@ when `goal.yaml` is missing — so first boot gets seeded, but a disk that alrea
 (possibly reflection-evolved) state is never overwritten. Keep this seed-if-missing logic
 if `state_defaults`/the entrypoint ever change; don't revert to copying straight into
 `./state` in the Dockerfile.
+
+**Worker vs Web Service:** Render cannot change an existing service's type in place (only
+delete-and-recreate) — this matters because the debug server (above) is only
+internet-reachable on a Web Service, not the currently-deployed Background Worker. Don't
+assume flipping `type: worker` → `type: web` in `render.yaml` takes effect on its own; it
+requires deliberately deleting and recreating the live service, which is a real, disruptive,
+human decision (not something to do as a drive-by config change).

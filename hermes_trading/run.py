@@ -2,9 +2,11 @@
 """Entry point for the Hermes trading worker."""
 import argparse
 import asyncio
+import os
 import yaml
 from pathlib import Path
 from hermes_trading.loop import trading_loop
+from hermes_trading.debug_server import start_background
 
 def load_goal():
     goal_path = Path(__file__).parent.parent / "state" / "goal.yaml"
@@ -30,6 +32,11 @@ def main():
 
     goal = load_goal()
     asset = args.asset or goal["asset"]
+
+    port = int(os.getenv("PORT", "8080"))
+    start_background(port)
+    print(f"Debug server listening on :{port} (/health, /dashboard, "
+          f"/state/trades, /state/hypotheses, /state/backtests, /state/heartbeat)")
 
     print(f"Booting hermes-trading worker for {asset} (paper mode)")
     asyncio.run(trading_loop(asset, goal))
