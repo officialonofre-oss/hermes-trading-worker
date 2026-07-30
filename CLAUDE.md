@@ -170,9 +170,9 @@ rather than accepting a path from the request — no path-traversal surface. All
 `/health` are gated by `DEBUG_TOKEN` if that env var is set (checked via `Authorization:
 Bearer <token>` or a `?token=` query param); unset, they're open. **Important:** this only
 becomes internet-reachable if the Render service is a Web Service — Render does not route
-public traffic to Background Workers, and it currently deploys as `type: worker` (see
-Deployment below). The server binds `$PORT` (falling back to 8080) either way, so it also
-works for local testing regardless of Render service type.
+public traffic to Background Workers, hence `render.yaml`'s `type: web` (see Deployment
+below). The server binds `$PORT` (falling back to 8080) either way, so it also works for
+local testing regardless of Render service type.
 
 **State directory** (`state/`) is the persistent, mutable heart of the system, separate from
 code:
@@ -192,11 +192,15 @@ a code change — keep that distinction in mind when a task asks to "adjust the 
 
 ## Deployment
 
-Runs as a Render.com background worker (`render.yaml`): built from the `Dockerfile`
-(`python:3.11-slim` + `uv`), with `state/` mounted on a persistent disk so strategy
-versioning and trade history survive restarts/deploys. `HERMES_TRADING_MODE` defaults to
-`paper`; `HERMES_TRADING_I_ACCEPT_RISK` defaults to `false` — there is no live-trading code
-path currently, so these are forward-looking safety flags rather than active switches.
+Runs as a Render.com Web Service (`render.yaml`, `type: web` — not a Background Worker;
+see the note below on why): built from the `Dockerfile` (`python:3.11-slim` + `uv`), with
+`state/` mounted on a persistent disk so strategy versioning and trade history survive
+restarts/deploys. It's a "web" service because of the debug server (below), not because
+the trading loop itself serves HTTP — `run.py` still runs `trading_loop()` as its main
+work, the debug server is just a background thread alongside it. `HERMES_TRADING_MODE`
+defaults to `paper`; `HERMES_TRADING_I_ACCEPT_RISK` defaults to `false` — there is no
+live-trading code path currently, so these are forward-looking safety flags rather than
+active switches.
 
 **Persistent-disk seeding gotcha:** Render's disk mounts at `/app/state` — the same path
 the Dockerfile would otherwise bake default state files into. On first boot the disk is
@@ -210,9 +214,10 @@ when `goal.yaml` is missing — so first boot gets seeded, but a disk that alrea
 if `state_defaults`/the entrypoint ever change; don't revert to copying straight into
 `./state` in the Dockerfile.
 
-**Worker vs Web Service:** Render cannot change an existing service's type in place (only
-delete-and-recreate) — this matters because the debug server (above) is only
-internet-reachable on a Web Service, not the currently-deployed Background Worker. Don't
-assume flipping `type: worker` → `type: web` in `render.yaml` takes effect on its own; it
-requires deliberately deleting and recreating the live service, which is a real, disruptive,
-human decision (not something to do as a drive-by config change).
+**Worker vs Web Service history:** this originally deployed as `type: worker`, which
+immediately made the debug server unreachable (Render doesn't route public traffic to
+Background Workers). Render cannot change an existing service's type in place — only
+delete-and-recreate — so getting to the current `type: web` config required deliberately
+deleting and recreating the live Render service, not just editing `render.yaml`. If this
+ever needs to move back to a plain worker (no debug server), the same rule applies: changing
+the YAML alone won't touch the live service.

@@ -1,9 +1,10 @@
 services:
-  - type: worker
+  - type: web
     name: hermes-trading-worker
     env: docker
     dockerfilePath: ./Dockerfile
     autoDeploy: true
+    healthCheckPath: /health
     disk:
       name: hermes-state
       mountPath: /app/state
@@ -13,3 +14,7 @@ services:
         value: paper
       - key: HERMES_TRADING_I_ACCEPT_RISK
         value: false
+      # Optional: set this to gate /dashboard and /state/* on the debug
+      # server. Leave unset and those routes stay open.
+      # - key: DEBUG_TOKEN
+      #   value: <choose-a-token>
