@@ -2,9 +2,11 @@
 Runs in a background thread alongside the trading loop; never writes to
 state/, only reads it. Stdlib only -- no new dependency for something this
 small. Optional DEBUG_TOKEN env var gates everything except /health."""
+import hmac
 import json
 import os
 import threading
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
@@ -12,6 +14,9 @@ from urllib.parse import urlparse, parse_qs
 from hermes_trading import dashboard
 
 STATE_DIR = Path(__file__).parent.parent / "state"
+
+COOKIE_NAME = "hermes_debug"
+COOKIE_MAX_AGE = 60 * 60 * 24 * 365  # a year -- this is a convenience gate, not a bank
 
 # Whitelisted by name on purpose -- never accept an arbitrary filesystem
 # path from the request, so there's no path-traversal surface.
@@ -25,15 +30,47 @@ JSON_FILES = {
 }
 
 
-def _authorized(handler) -> bool:
+def _matches(candidate, token: str) -> bool:
+    """Constant-time compare so response timing doesn't leak how many
+    leading characters of the token were correct."""
+    if not isinstance(candidate, str):
+        return False
+    return hmac.compare_digest(candidate, token)
+
+
+def _cookie_token(handler):
+    raw = handler.headers.get("Cookie")
+    if not raw:
+        return None
+    jar = SimpleCookie()
+    try:
+        jar.load(raw)
+    except Exception:
+        return None
+    morsel = jar.get(COOKIE_NAME)
+    return morsel.value if morsel else None
+
+
+def _authorized(handler):
+    """Returns (authorized, via) where `via` is "open" | "header" | "cookie"
+    | "query". "query" is authorized but the caller should redirect to strip
+    the token out of the URL -- see do_GET."""
     token = os.getenv("DEBUG_TOKEN")
     if not token:
-        return True  # no token configured -- endpoint is open, by choice
+        return True, "open"  # no token configured -- endpoint is open, by choice
+
     auth = handler.headers.get("Authorization", "")
-    if auth == f"Bearer {token}":
-        return True
+    if auth.startswith("Bearer ") and _matches(auth[len("Bearer "):], token):
+        return True, "header"
+
+    if _matches(_cookie_token(handler), token):
+        return True, "cookie"
+
     query = parse_qs(urlparse(handler.path).query)
-    return query.get("token", [None])[0] == token
+    if _matches(query.get("token", [None])[0], token):
+        return True, "query"
+
+    return False, None
 
 
 class DebugHandler(BaseHTTPRequestHandler):
@@ -47,6 +84,29 @@ class DebugHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_cookie_redirect(self, path: str, token: str):
+        """Set the token as an HttpOnly cookie, then bounce to the same path
+        with the query string stripped. This is what makes phone-browser use
+        both convenient and safe: you paste ?token=... exactly once, the URL
+        in the address bar (and in history from here on) is clean, and every
+        later visit authenticates from the cookie with no token in the URL."""
+        # Render terminates TLS and forwards the original scheme; only mark the
+        # cookie Secure when the request really came in over HTTPS, so local
+        # http testing still works.
+        https = self.headers.get("X-Forwarded-Proto", "").lower() == "https"
+        cookie = (
+            f"{COOKIE_NAME}={token}; Path=/; Max-Age={COOKIE_MAX_AGE}; "
+            f"HttpOnly; SameSite=Lax"
+        )
+        if https:
+            cookie += "; Secure"
+
+        self.send_response(302)
+        self.send_header("Location", path)
+        self.send_header("Set-Cookie", cookie)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_GET(self):
         path = urlparse(self.path).path
 
@@ -54,8 +114,13 @@ class DebugHandler(BaseHTTPRequestHandler):
             self._send(200, b"ok")
             return
 
-        if not _authorized(self):
+        authorized, via = _authorized(self)
+        if not authorized:
             self._send(401, b"unauthorized")
+            return
+
+        if via == "query":
+            self._send_cookie_redirect(path, os.environ["DEBUG_TOKEN"])
             return
 
         if path == "/dashboard":

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import yaml
 from hermes_trading.score import score_trades
-from hermes_trading.strategy_rules import evaluate_entry, evaluate_exit
+from hermes_trading.strategy_rules import evaluate_entry, evaluate_exit, explain_entry
 from hermes_trading.adapters.price import fetch_price
 from hermes_trading.adapters.onchain import fetch_onchain
 from hermes_trading.adapters.news import fetch_news
@@ -112,16 +112,30 @@ async def trading_loop(asset, goal):
             sentiment = news.get("sentiment", "neutral")
             onchain_trend = onchain.get("trend", "unknown")
             decision = evaluate_entry(rsi, strategy, sentiment=sentiment, onchain_trend=onchain_trend)
+            position_open = await has_open_position(price.get("symbol"))
 
-            if decision and not await has_open_position(price.get("symbol")):
+            if decision and not position_open:
                 signals = {"rsi": rsi, "sentiment": sentiment, "onchain_trend": onchain_trend}
                 await paper_trade(decision, price, strategy, signals=signals)
+                position_open = True
 
-            # heartbeat
+            # Heartbeat doubles as the live "why isn't it trading?" record: it
+            # carries the current signal readings and which entry gate is
+            # blocking, so a quiet stretch is legible instead of looking dead.
+            gates = explain_entry(rsi, strategy, sentiment=sentiment, onchain_trend=onchain_trend)
             heartbeat = {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "asset": asset,
                 "last_price": price.get("price"),
+                "strategy_version": strategy["version"],
+                "signals": {
+                    "rsi": rsi,
+                    "sentiment": sentiment,
+                    "onchain_trend": onchain_trend,
+                },
+                "entry_gates": gates,
+                "entry_blocked_by": [g["name"] for g in gates if not g["passing"]],
+                "has_open_position": position_open,
                 "consecutive_failures": consecutive_failures
             }
             with open(HEARTBEAT_FILE, "w") as f:

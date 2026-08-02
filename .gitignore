@@ -12,5 +12,8 @@ wheels/
 # Local secrets
 .env
 
-# Generated at runtime, not checked in
+# Generated at runtime, not checked in. These live on the Render persistent
+# disk in production -- committing a local copy would fight with real state.
 state/dashboard.html
+state/trades.jsonl
+state/heartbeat.json

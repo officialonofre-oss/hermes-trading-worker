@@ -36,12 +36,24 @@ def _read_jsonl(path: Path) -> List[Dict]:
         return [json.loads(line) for line in f if line.strip()]
 
 
+def _read_json(path: Path) -> Dict:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        # heartbeat.json is rewritten in place every cycle, so a read landing
+        # mid-write can see a truncated file. Not worth failing the page over.
+        return {}
+
+
 def build_data(state_dir: Path = STATE_DIR) -> Dict:
     strategy = _read_yaml(state_dir / "strategy.yaml")
     goal = _read_yaml(state_dir / "goal.yaml")
     trades = _read_jsonl(state_dir / "trades.jsonl")
     hypotheses = _read_jsonl(state_dir / "hypotheses.jsonl")
     backtests = _read_jsonl(state_dir / "backtests.jsonl")
+    heartbeat = _read_json(state_dir / "heartbeat.json")
 
     closed = [t for t in trades if t.get("closed")]
     wins = [t for t in closed if t.get("pnl", 0) > 0]
@@ -62,6 +74,7 @@ def build_data(state_dir: Path = STATE_DIR) -> Dict:
         "is_sample": len(trades) == 0,
         "strategy": strategy,
         "goal": goal,
+        "heartbeat": heartbeat,
         "summary": summary,
         "trades": list(reversed(trades))[:100],
         "hypotheses": list(reversed(hypotheses))[:50],
@@ -71,7 +84,14 @@ def build_data(state_dir: Path = STATE_DIR) -> Dict:
 
 def render(data: Dict) -> str:
     template = TEMPLATE_FILE.read_text()
-    return template.replace("__DASHBOARD_DATA__", json.dumps(data))
+    # Escape "<" before embedding the JSON in a <script> block. Every field
+    # today is a fixed enum or admin-set config, so nothing can currently
+    # carry markup -- but the moment someone adds a free-text field (a real
+    # news headline, an API error string), an unescaped "</script>" would
+    # break out of the block and execute. < is valid inside a JSON
+    # string and parses back to "<", so the data itself is unchanged.
+    payload = json.dumps(data).replace("<", "\\u003c")
+    return template.replace("__DASHBOARD_DATA__", payload)
 
 
 def main():

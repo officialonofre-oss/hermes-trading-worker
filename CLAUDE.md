@@ -57,7 +57,10 @@ instead, and `.env` doesn't exist there.
    paper trade with the signals that led to it (`paper_trade(..., signals={...})`). The
    one-position-at-a-time guard exists because nothing else prevents the loop from opening a
    new near-duplicate trade every single cycle while RSI stays under threshold.
-5. Write a heartbeat to `state/heartbeat.json`.
+5. Write a heartbeat to `state/heartbeat.json`. This is not just a liveness ping — it also
+   records the current signal readings and each entry gate's state (via `explain_entry`),
+   so a long quiet stretch is legible ("RSI 45.2, needs < 28") instead of looking like a
+   stalled worker. The dashboard's "Right Now" panel renders it.
 6. On exceptions: increment a failure counter, sleep 30s, and retry; after 5 consecutive
    failures the loop breaks (circuit breaker) rather than spinning forever.
 
@@ -67,6 +70,13 @@ instead, and `.env` doesn't exist there.
 exist specifically so `loop.py` (live) and `backtest.py` (historical replay) evaluate a
 strategy identically — do not reimplement entry/exit logic inline in either place; import
 from here instead.
+
+`explain_entry(...)` applies the same four gates as `evaluate_entry` but reports each one's
+pass/block state instead of short-circuiting, so the dashboard can show *why* no trade
+fired. **These two must stay in agreement** — `evaluate_entry` returns a decision exactly
+when `explain_entry` reports zero blocking gates. If you change one, change the other, and
+re-run the exhaustive property check (all combinations of rsi/threshold/direction/sentiment/
+trend) that asserts the equivalence.
 
 RSI is the primary signal (`entry.threshold` in `strategy.yaml`); sentiment and onchain
 trend are a **veto, not a confirmation requirement** — `sentiment == "bearish"` or
@@ -152,7 +162,13 @@ single-page view of what the bot has traded, why (the `signals` recorded on each
 RSI/sentiment/onchain trend), and reflection/backtest history. `build_data()` assembles a
 plain dict (reusing `score.max_drawdown`/`sharpe_ratio` for the summary tiles); `render()`
 does a single string substitution of that dict as JSON into `__DASHBOARD_DATA__` in the
-template — no templating engine dependency. The template's own JS falls back to
+template — no templating engine dependency. **`render()` escapes `<` to `<` in that
+JSON before embedding it** — every field today is a fixed enum or admin-set config, but the
+page is publicly reachable, so the first free-text field anyone adds (a real headline, an
+API error string) would otherwise be a stored-XSS vector via `</script>`. Keep the escape
+if you touch `render()`. The "Right Now" panel is driven by `heartbeat.json` and is always
+real (never sample) — it's hidden entirely if the loop hasn't completed a cycle yet. The
+rest of the template's JS falls back to
 hardcoded sample data **per section** (trades/hypotheses/backtests independently) when a
 given `state/*.jsonl` is still empty, so early-history real data (e.g. an existing
 `hypotheses.jsonl` entry) is never masked just because `trades.jsonl` happens to be empty
@@ -167,8 +183,16 @@ shelling in. Routes: `/health` (always open), `/dashboard` (same `dashboard.buil
 `render()` as the CLI tool, live), `/state/{trades,hypotheses,backtests}` (JSON arrays from
 the matching `.jsonl`), `/state/heartbeat` (JSON). Deliberately whitelists exact file keys
 rather than accepting a path from the request — no path-traversal surface. All routes except
-`/health` are gated by `DEBUG_TOKEN` if that env var is set (checked via `Authorization:
-Bearer <token>` or a `?token=` query param); unset, they're open. **Important:** this only
+`/health` are gated by `DEBUG_TOKEN` if that env var is set; unset, they're open.
+
+Auth accepts three credentials, in order: an `Authorization: Bearer <token>` header (for
+curl/API use), an `hermes_debug` cookie, or a `?token=` query param. The query-param path is
+deliberately **one-shot**: it responds `302` with an `HttpOnly` cookie and redirects to the
+same path with the query stripped, so the token lands in browser history and request logs
+once at setup rather than on every visit. Practically this means: paste
+`/dashboard?token=…` once on a phone, then bookmark the clean `/dashboard` and it keeps
+working. `Secure` is set on the cookie only when `X-Forwarded-Proto: https` (which Render
+sets), so local http testing still works. Token comparison uses `hmac.compare_digest`. **Important:** this only
 becomes internet-reachable if the Render service is a Web Service — Render does not route
 public traffic to Background Workers, hence `render.yaml`'s `type: web` (see Deployment
 below). The server binds `$PORT` (falling back to 8080) either way, so it also works for

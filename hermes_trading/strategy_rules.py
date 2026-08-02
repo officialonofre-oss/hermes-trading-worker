@@ -1,6 +1,6 @@
 """Pure entry/exit decision rules, shared by the live loop and the backtester
 so a strategy is always evaluated identically in both places."""
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 
 def evaluate_entry(rsi: float, strategy: Dict, sentiment: str = "neutral",
@@ -18,6 +18,41 @@ def evaluate_entry(rsi: float, strategy: Dict, sentiment: str = "neutral",
     if onchain_trend == "declining":
         return None
     return "enter_long"
+
+
+def explain_entry(rsi: float, strategy: Dict, sentiment: str = "neutral",
+                  onchain_trend: str = "unknown") -> List[Dict]:
+    """The same gates evaluate_entry applies, but reported individually
+    instead of short-circuiting -- so the dashboard can show *why* no trade
+    fired ("RSI 45.2, needs < 28") rather than just showing nothing.
+
+    These two functions must agree: there's a property test asserting
+    evaluate_entry returns a decision exactly when no gate here is blocking.
+    Change one, change the other."""
+    entry = strategy["entry"]
+    threshold = entry["threshold"]
+    return [
+        {
+            "name": "direction",
+            "passing": entry["direction"] == "long",
+            "detail": f"strategy direction is {entry['direction']}",
+        },
+        {
+            "name": "rsi",
+            "passing": rsi < threshold,
+            "detail": f"RSI {round(rsi, 2)} vs threshold {threshold}",
+        },
+        {
+            "name": "sentiment",
+            "passing": sentiment != "bearish",
+            "detail": f"sentiment is {sentiment}",
+        },
+        {
+            "name": "onchain_trend",
+            "passing": onchain_trend != "declining",
+            "detail": f"onchain trend is {onchain_trend}",
+        },
+    ]
 
 
 def evaluate_exit(entry_price: float, current_price: float, strategy: Dict) -> Optional[Dict]:
